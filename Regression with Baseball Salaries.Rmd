@@ -1,0 +1,231 @@
+---
+title: "What Variable Influences Baseball Players Salaries The Most?"
+author: "Aston Pearcy - [Linkedin](https://www.linkedin.com/in/aston-pearcy/)"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## **Context**
+
+The dataset I am analysing is the Hitters dataset from the ISLR package in R. The dataset contains information on Major League Baseball players in the 1986 season and 1987 opening day, and is made up of 322 observations on the following 20 variables:
+
+| Variable Label |                                Meaning                                |
+|:--------------:|:---------------------------------------------------------------------:|
+|     AtBat      |                 Number of times at bat in the season                  |
+|      Hits      |                      Number of hits in the season                     |
+|     HmRun      |                   Number of home runs in the season                   |
+|      Runs      |                     Number of runs in the season                      |
+|      RBI       |                Number of runs batted in in the season                 |
+|     Walks      |                     Number of walks in the season                     |
+|     Years      |                 Number of years in the major leagues                  |
+|     CAtBat     |                   Number of times at bat in career                    |
+|     CHits      |                       Number of hits in career                        |
+|     CHmRun     |                     Number of home runs in career                     |
+|     CRuns      |                       Number of runs in career                        |
+|      CRBI      |                  Number of runs batted in in career                   |
+|     CWalks     |                       Number of walks in career                       |
+|     League     |  Factor with levels A and N denoting players league at end of season  |
+|    Division    | Factor with levels E and W denoting players division at end of season |
+|    PutOuts     |                    Number of putouts in the season                    |
+|    Assists     |                    Number of assists in the season                    |
+|     Errors     |                    Number of errors in the season                     |
+|   NewLeague    |   Factor with levels A and N indicating league at beginning of 1987   |
+|     Salary     |       Annual salary on opening day 1987 in thousands of dollars       |
+
+Most of these variables are numerical.
+
+I wanted to see what variables had the greatest effect on the salary of players. From an outside perspective sometimes the salaries that players are paid is highly subjective (in any sport) so I thought it would be interesting to see the relationship between a players performance statistics and the salary they're paid.
+
+This work was done as part of my studies at the University of Otago in the STAT312 paper, "Modelling High Dimensional Data".
+
+## **Analysis**
+
+*Setting up and cleaning data*
+
+```{r message=FALSE, warning=FALSE}
+library(ISLR)
+d = na.omit(Hitters)
+d$logSalary = log(d$Salary)
+library(dplyr)
+d = select(d, -Salary)
+```
+
+```{r}
+set.seed(499)
+train = sample(1:nrow(d), 0.7*nrow(d))
+test = -train
+```
+
+*Constructing regression trees using rpart package*
+
+```{r}
+par(mar = c(0,0,3,0), cex = 0.85)
+library(rpart)
+rparthitters = rpart(logSalary~., data=d, subset=train, method = "anova")
+plot(rparthitters)
+text(rparthitters, pretty = 1, digits = 2)
+title(main = "Initial regression tree")
+```
+
+The tree first partitions the data at the CAtBat variable. Seems that with this approach the number of times at bat over the career of a player has the largest effect on the players' salary. This doesn't seem unreasonable as the batting order in baseball is decided by the team manager. The earlier batters (1-4) bat more than the later ones and are generally the better batters, and so bring in more home runs for the team. Therefore, they are likely prioritsed and paid more than some of the other players. Earlier batters are also historically the more famous of the players, and so could be expected to be paid more money as they are a bigger name and carry a certain level of prestige with them.
+
+*Next, a bagged model was constructed (20 variables, 19 predictors, 1 outcome):*
+
+```{r message=FALSE, warning=FALSE}
+library(randomForest)
+set.seed(590)
+bhitters = randomForest(logSalary~., data=d, mtry = 19, subset=train, importance = TRUE)
+round((bhitters$importance),2)
+bhitters
+```
+
+The model captures \~80% of the variance contained within the data. The results of this bagged model are pleasingly in line with the regression tree analysis conducted above. The most important variable to the model was again found to be CAtBat, the number of times the player was at bat in their career. This was true with inclusion of the MSE, and inclusion of node purity.
+
+*Fitting random forest model:*
+
+```{r}
+set.seed(7000)
+rfhitters = randomForest(logSalary~., data=d, subset = train, importance = TRUE)
+rfhitters
+```
+
+*Setting values of mtry explicitly:*
+
+```{r}
+rfhitters10 = randomForest(logSalary~., data=d, mtry = 10,subset = train, importance = TRUE)
+rfhitters10
+```
+
+*Testing more values of mtry*
+
+```{r}
+rfhitters5 = randomForest(logSalary~., data=d, mtry = 5,subset = train, importance = TRUE)
+rfhitters5
+```
+
+Seems like mtry = 5 gives the lowest mean squared residuals, and the greatest %variance explained.
+
+```{r}
+round((rfhitters5$importance),2)
+```
+
+Again, CAtBat is the most important variable, however, there are some that are almost as important, these are CRuns, CHits, CRBI, and CWalks.
+
+*Constructing a boosted tree model:*
+
+```{r warning=FALSE, message=FALSE}
+library(gbm)
+boostedhitters = gbm(logSalary~., data=d[train,], distribution = "gaussian", cv.folds = 10, n.cores=1, n.trees = 200)
+boostedhitters
+```
+
+*Finding the best model:*
+
+```{r}
+gbm.perf(boostedhitters,method="cv")
+```
+
+n.trees for best model indicated by the dotted blue line. Found to be at a value of n.trees = 102.
+
+*Using optimal value for best model:*
+
+```{r}
+bestboostedhitters = gbm(logSalary~., data=d[train,], distribution = "gaussian", n.cores=1, n.trees = 102)
+summary(bestboostedhitters)
+```
+
+Boosted tree model shows that the variable CAtBat has a very high relative influence, about two times that of the second most influential variable, which is CRBI. Perhaps unsurprisingly, the career long variables generally show more influence on the salary of a player than just the year long variables. The Years variable shows a moderate influence on the salary of the player, which makes sense as the longer a player has been in the major leagues the more experienced they are and the more value they can provide to a team, therefore earning a better salary.
+
+Variables were plotted against each other to determine if there were any problems with collinearity. The dataset contains many career variables that could show an interaction with each other such as CAtBat and CHits. It is expected that the more times a player is at bat in their career then the more times they would have hit the ball.
+
+```{r}
+plot(d[,c(1,8:13,4,7,2)])
+```
+
+As expected, the career variables show a high level of collinearity with other career variables. The variable AtBat displays a high level of collinearity with the Years and Hits variables.
+
+*Addressing the collinearity by removing the career variables and AtBat:*
+
+```{r}
+d2 = d[,-c(1, 8:13)] 
+```
+
+------------------------------------------------------------------------
+
+*Redoing previous analyses with newly generated dataset:*
+
+```{r}
+set.seed(499)
+train = sample(1:nrow(d2), 0.7*nrow(d2))
+test = -train
+```
+
+*The bagged method:*
+
+```{r}
+set.seed(590)
+bhitters = randomForest(logSalary~.,data=d2, mtry = 12,subset=train, importance = TRUE)
+bhitters
+round((bhitters$importance),2)
+```
+
+The model explains \~75% of the variance in the dataset. The most important variable is Years, including both MSE and NodePurity.
+
+*Random forest method:*
+
+```{r}
+set.seed(7000)
+rfhitters = randomForest(logSalary~., data=d2, subset = train, importance = TRUE)
+rfhitters
+```
+
+*Will test other values of mtry:*
+
+```{r}
+rfhitters6 = randomForest(logSalary~., data=d2, mtry = 6, subset = train, importance = TRUE)
+rfhitters6
+```
+
+```{r}
+rfhitters10 = randomForest(logSalary~., data=d2, mtry = 10, subset = train, importance = TRUE)
+rfhitters10
+```
+
+mtry= 10 gives the highest variance explained and the lowest mean of squared residuals.
+
+*Lastly, using the boosted tree method:*
+
+```{r}
+boostedhitters = gbm(logSalary~., data=d2[train,], distribution = "gaussian", cv.folds = 10, n.cores=1, n.trees = 200)
+boostedhitters
+```
+
+*Finding the best model:*
+
+```{r}
+gbm.perf(boostedhitters,method="cv")
+```
+
+n.trees for best model indicated by the dotted blue line. Found to be at a value of n.trees = 154.
+
+*Using optimal value for best model:*
+
+```{r}
+bestboostedhitters = gbm(logSalary~., data=d2[train,], distribution = "gaussian", n.cores=1, n.trees = 154)
+summary(bestboostedhitters)
+```
+
+The variable with the greatest influence is the Years variable. The Years variable is very influential, having about four times the influence of the second variable. The Years variable being highly influential could suggest that, like before, the more experienced players are paid more due to the value that they provide the team.
+
+Another influential variable is the Hits variable. The influence of the Hits variable could be viewed from the perspective that highly paid players tend to be at bat more as they are generally placed earlier in the batting order and so have more opportunities to gain a hit. They also could have a higher hit rate, and that could be a driving factor for them being paid a higher salary.
+
+Both of these observations are consistent with the bagged method used prior.
+
+## **Summary**
+
+Using a wide variety of regression tree methods an investigation into the influence of a range of variables on the salary of baseball players was conducted. Initial analyses suggested that the variable CAtBat - the number of times at bat in a players career - had the greatest influence on the salary of a player. The collinearity of the data was looked at, and it was determined that the career variables (Variables with a C in front of their label) displayed a high level of collinearity with each other. These variables were removed, along with others showing collinear behaviour, and analyses were repeated. The most important variable to a players salary was then determined to be the Years variable, which is the number of years in the major leagues. This could be due to their reputation and the trust that can be placed in their ability, due to a proven track record.
